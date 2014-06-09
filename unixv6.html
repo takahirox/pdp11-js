@@ -1,0 +1,510 @@
+<html>
+<head>
+<meta charset="utf-8">
+<title>PDP11 Emulator with UNIX V6</title>
+<script type="text/javascript" src="utility/JsImport.js"></script>
+<script type="text/javascript" src="pdp11/Import.js"></script>
+<script type="text/javascript" src="pdp11/TextAreaView.js"></script>
+<script type="text/javascript">
+
+var __pdp11 ;
+var __unixV6DiskImageURL = 'https://pdp11-js.googlecode.com/git/disk_image/v6bin' ;
+var __terminalView ;
+var __debugView ;
+var __debugCanvas ;
+var __pdp11View ;
+var __stackView ;
+var __figureWindow ;
+var __breakPoints = [ ] ;
+
+
+/**
+ * TODO: maybe better to change the function name
+ */
+var dragOver = function( event ) {
+  event.preventDefault( ) ;
+} ;
+
+
+/**
+ * TODO: appropriate error message.
+ */
+var dropDiskImage = function( event ) {
+
+  event.preventDefault( ) ;
+  var file = event.dataTransfer.files[ 0 ] ;
+
+  var reader = new FileReader( ) ;
+  reader.onload = function( event ) {
+    initPdp11( event.target.result ) ;
+  } ;
+  reader.onerror = function( e ) {
+    __terminalView.outputLine( 'Error!' ) ;
+    for( var key in reader.error ) {
+      __terminalView.output( key + '=' + reader.error[ key ] + '<br />' ) ;
+    }
+  } ;
+  reader.readAsArrayBuffer( file ) ;
+  __terminalView.outputLine( 'loading image...' ) ;
+
+} ;
+
+
+/**
+ * TODO: appropriate error message.
+ */
+var loadUnixV6DiskImage = function( ) {
+  var request = new XMLHttpRequest( ) ;
+  request.responseType = 'arraybuffer' ;
+  request.onload = function( ) {
+    initPdp11( request.response ) ;
+  } ;
+  request.onerror = function( e ) {
+    __terminalView.outputLine( 'Error!' ) ;
+  } ;
+  request.open( 'GET', __unixV6DiskImageURL, true ) ;
+  request.send( null ) ;
+  __terminalView.outputLine( 'loading image...' ) ;
+} ;
+
+
+/**
+ * @param buffer ArrayBuffer including Disk image
+ */
+var initPdp11 = function( buffer ) {
+  document.getElementById( 'loadV6Button' ).disabled = true ;
+  document.getElementById( 'exportButton' ).disabled = false ;
+  document.getElementById( 'resetButton' ).disabled = false ;
+  document.getElementById( 'stopButton' ).disabled = false ;
+
+  __terminalView.focus( ) ;
+
+  __pdp11 = new Pdp11( __terminalView, __debugCanvas ) ;
+  __pdp11.disk.importBuffer( buffer ) ;
+  changeDebugFlags( ) ;
+  updateBreakPoints( ) ;
+  __pdp11.loadBootRom( buffer ) ;
+  __pdp11.run( ) ;
+} ;
+
+
+/**
+ * TODO: make it run as specification
+ */
+var resetPdp11 = function( ) {
+  if( __pdp11 )
+    initPdp11( __pdp11.disk.exportBuffer( ) ) ;
+} ;
+
+
+/**
+ * TODO: optimize
+ */
+var exportDiskImage = function( ) {
+  var span = document.getElementById( 'diskImageSpan' ) ;
+  while( span.firstChild )
+    span.removeChild( span.firstChild )
+  var buffer = __pdp11.disk.exportBuffer( ) ;
+  var a = document.createElement( 'a' ) ;
+  a.download = 'v6bin' ;
+  a.href = window.URL.createObjectURL( new Blob( [ new Uint8Array( buffer ) ] ) ) ;
+  a.textContent = 'disk image' ;
+  span.appendChild( a ) ;
+} ;
+
+
+/**
+ *
+ */
+var init = function( ) {
+  document.getElementById( 'exportButton' ).disabled = true ;
+  document.getElementById( 'resetButton' ).disabled = true ;
+  __terminalView = new TextAreaView( 'terminalView' ) ;
+  __debugView = new LimitedLinesTextAreaView( 'debugView' ) ;
+  __pdp11View = new TextAreaView( 'pdp11View' ) ;
+  __stackView = new TextAreaView( 'stackView' ) ;
+  document.getElementById( 'instructionCheck' ).disabled = true ;
+  document.getElementById( 'kernelSymbolCheck' ).disabled = true ;
+  document.getElementById( 'stopButton' ).disabled = true ;
+  document.getElementById( 'nextStepButton' ).disabled = true ;
+  document.getElementById( 'continueButton' ).disabled = true ;
+  document.getElementById( 'virtualAddressButton' ).disabled = true ;
+  document.getElementById( 'physicalAddressButton' ).disabled = true ;
+  __debugCanvas = document.getElementById( 'debugCanvas' ) ;
+  displayInitialMessage( ) ;
+} ;
+
+
+/**
+ *
+ */
+var changeDebugState = function( flag ) {
+  changeDebugFlags( ) ;
+  updateBreakPoints( ) ;
+} ;
+
+
+/**
+ *
+ */
+var changeDebugFlags = function( ) {
+  if( ! __pdp11 )
+    return ;
+  for( var key in __pdp11.debugFlags ) {
+    __pdp11.debugFlags[ key ] = document.getElementById( key + 'Check' ).checked ;
+  }
+} ;
+
+
+/**
+ *
+ */
+var inputTerminalByKeypress = function( e ) {
+  if( e.ctrlKey )
+    return ;
+  var keyCode = e.keyCode ;
+  if( keyCode >= 0x41 && keyCode <= 0x5a && ! e.shiftKey ) {
+    keyCode += 0x20 ;
+  }
+  if( __pdp11 )
+    __pdp11.terminal.input( keyCode ) ;
+  e.preventDefault( ) ;
+} ;
+
+
+/**
+ * handle special characters.
+ * TODO: combine to inputeTerminalByKeypress?
+ */
+var inputTerminalByKeydown = function( e ) {
+  var keyCode = e.keyCode ;
+  if( e.ctrlKey ) {
+    switch( keyCode ) {
+      case 0x44: // d
+        keyCode = 4 ;
+        break ;
+      default:
+        return ;
+    }
+  } else {
+    switch( keyCode ) {
+      case 0x8:  // backspace
+      case 0x9:  // tab
+        break ;
+      case 0x13: // pause
+        keyCode = 034 ;
+        break ;
+      case 0x2e: // del
+        keyCode = 0177 ;
+        break ;
+      default:
+        return ;
+    }
+  }
+  if( __pdp11 )
+    __pdp11.terminal.input( keyCode ) ;
+  e.preventDefault( ) ;
+} ;
+
+
+/**
+ *
+ */
+var inputTerminalForAndroid = function( ) {
+  var input = document.getElementById( 'androidInput' ) ;
+  if( __pdp11 ) {
+    input.setAttribute( 'readonly', true ) ;
+    var str = input.value + '\n' ;
+    var i = 0 ;
+    var func = function( ) {
+      __pdp11.terminal.input( str.charCodeAt( i ) ) ;
+      input.value = input.value.slice( 1, input.value.length ) ;
+      i++ ;
+      if( i < str.length )
+        setTimeout( func, 5 ) ;
+      else
+        input.removeAttribute( 'readonly' ) ;
+    } ;
+    func( ) ;
+  } else {
+    input.value = '' ;
+  }
+} ;
+
+/**
+ *
+ */
+var updateBreakPoints = function( value ) {
+  var select = document.getElementById( 'breakPointsSelect' ) ;
+  while( select.firstChild )
+    select.removeChild( select.firstChild ) ;
+  for( var i = 0; i < __breakPoints.length; i++ ) {
+    var option = document.createElement( 'option' ) ;
+    option.value = __breakPoints[ i ] ;
+    option.text = __breakPoints[ i ] ;
+    if( value != undefined && value == __breakPoints[ i ] )
+      option.selected = true ;
+    select.appendChild( option ) ;
+  }
+  if( __pdp11 ) {
+    __pdp11.setBreakPoints( __breakPoints ) ;
+  }
+} ;
+
+
+/**
+ *
+ */
+var addBreakPoint = function( ) {
+  var value = Number( document.getElementById( 'breakPointInput' ).value ) ;
+  if( ! isNaN( value ) && __breakPoints.indexOf( value ) < 0 ) {
+    __breakPoints.push( value ) ;
+    __breakPoints.sort(
+      function( a, b ) {
+        if( a < b ) return -1 ;
+        if( a > b ) return 1 ;
+        return 0 ;
+      }
+    ) ;
+    updateBreakPoints( value ) ;
+  }
+} ;
+
+
+/**
+ *
+ */
+var removeBreakPoint = function( ) {
+  var select = document.getElementById( 'breakPointsSelect' ) ;
+  if( select.selectedIndex < 0 )
+    return ;
+  var value = Number( select.selectedOptions.item( ).value ) ;
+  __breakPoints.splice( __breakPoints.indexOf( value ), 1 ) ;
+  updateBreakPoints( ) ;
+} ;
+
+
+/**
+ * TODO: implement
+ */
+var stopPdp11 = function( ) {
+  document.getElementById( 'stopButton' ).disabled = true ;
+  __pdp11.break = true ;
+} ;
+
+
+/**
+ *
+ */
+var stopAtBreakPoint = function( ) {
+  document.getElementById( 'stopButton' ).disabled = true ;
+  document.getElementById( 'nextStepButton' ).disabled = false ;
+  document.getElementById( 'continueButton' ).disabled = false ;
+  document.getElementById( 'virtualAddressButton' ).disabled = false ;
+  document.getElementById( 'physicalAddressButton' ).disabled = false ;
+} ;
+
+
+/**
+ *
+ */
+var nextStep = function( ) {
+  document.getElementById( 'stopButton' ).disabled = false ;
+  document.getElementById( 'nextStepButton' ).disabled = true ;
+  document.getElementById( 'continueButton' ).disabled = true ;
+  document.getElementById( 'virtualAddressButton' ).disabled = true ;
+  document.getElementById( 'physicalAddressButton' ).disabled = true ;
+  __pdp11.resume( ) ;
+} ;
+
+
+/**
+ * TODO: function name
+ */
+var continueStep = function( ) {
+  document.getElementById( 'stopButton' ).disabled = false ;
+  document.getElementById( 'nextStepButton' ).disabled = true ;
+  document.getElementById( 'continueButton' ).disabled = true ;
+  document.getElementById( 'virtualAddressButton' ).disabled = true ;
+  document.getElementById( 'physicalAddressButton' ).disabled = true ;
+  __pdp11.break = false ;
+  __pdp11.resume( ) ;
+} ;
+
+
+/**
+ *
+ */
+var displayInitialMessage = function( ) {
+  __terminalView.outputLine( 'Drag and drop your UNIX V6 disk image here or' ) ;
+  __terminalView.outputLine( 'press the "load UNIX V6 Disk image" button to run UNIX V6.' ) ;
+  __terminalView.outputLine( '' ) ;
+  __terminalView.outputLine( 'Type "rkunix" slowly (\'cuz some reasons) when "@" is displayed.' ) ;
+  __terminalView.outputLine( 'And then, type "root" when "login: " is displayed.' ) ;
+  __terminalView.outputLine( '' ) ;
+  __terminalView.outputLine( 'Note that, use "#" instead of backspace.' ) ;
+  __terminalView.outputLine( 'And use "chdir" instead of "cd".' ) ;
+  __terminalView.outputLine( '' ) ;
+  __terminalView.outputLine( 'I confirmed only it runs on the combination of Windows and Chrome.' ) ;
+  __terminalView.outputLine( '' ) ;
+  __terminalView.outputLine( '           ' +
+                            'Enjoy UNIX V6 on your web browser! -- Takahiro(@superhoge)' ) ;
+  __terminalView.outputLine( '' ) ;
+} ;
+
+
+/**
+ *
+ */
+var showDebugger = function( ) {
+  var span = document.getElementById( 'debuggerSpan' ) ;
+  if( span.style.cssText == '' ) {
+    span.style.cssText = 'display: none' ;
+  } else {
+    span.style.cssText = '' ;
+  } ;
+} ;
+
+
+/**
+ * TODO: duplicated codes.
+ */
+var loadVirtualAddress = function( ) {
+  var address = Number( document.getElementById( 'memoryAddressInput' ).value ) ;
+  if( isNaN( address ) )
+    return ;
+  var buffer = 'v_address:' + format( address ) + ' ' +
+               'p_address:' + format( __pdp11.mmu._convert( address, true ), 5 ) + ' ' +
+               'value:'     + format( __pdp11.mmu.loadWord( address, true ) ) ;
+  __debugView.outputLine( buffer ) ;
+} ;
+
+
+/**
+ * TODO: duplicated codes.
+ */
+var loadPhysicalAddress = function( ) {
+  var address = Number( document.getElementById( 'memoryAddressInput' ).value ) ;
+  if( isNaN( address ) )
+    return ;
+  var buffer = 'p_address:' + format( address ) + ' ' +
+               'value:'     + format( __pdp11.mmu.loadWordByPhysicalAddress( address ), 5 ) ;
+  __debugView.outputLine( buffer ) ;
+} ;
+
+
+/**
+ * 
+ */
+var flushLog = function( ) {
+  if( __logger.getUrl == undefined )
+    return ;
+  var span = document.getElementById( 'traceLogSpan' ) ;
+  while( span.firstChild )
+    span.removeChild( span.firstChild )
+  var a = document.createElement( 'a' ) ;
+  a.download = 'log' ;
+  a.href = __logger.getUrl( ) ;
+  a.textContent = 'log' ;
+  span.appendChild( a ) ;
+} ;
+
+window.addEventListener( 'drop', dropDiskImage, false ) ;
+window.addEventListener( 'dragover', dragOver, false ) ;
+
+</script>
+</head>
+
+<body onLoad="init( )">
+
+<p>
+<ul>
+<li>Introduction
+ <ul>
+ <li>This is the PDP11 emulator with JavaScript implemented by <a href="https://twitter.com/superhoge">takahiro(@superhoge)</a></li>
+ <li>You can run UNIX V6 on your web browser.</li>
+ <li><a href="http://d.hatena.ne.jp/takahirox/20130801/1375334305">See this page for the detail.</a></li>
+ <li><a href="http://www.youtube.com/watch?v=CsSPiM07amg">This is the demonstration video</a></li>
+ <li><a href="http://d.hatena.ne.jp/takahirox/20121214/1355490840">If you wanna study UNIX V6 kernel...</a></li>
+ </ul>
+</li>
+<li>UNIX V6 Tips
+ <ul>
+ <li>Type "rkunix" slowly ('cuz some reasons) when "@" is displayed.</li>
+ <li>Type "root" when "login: " is displayed.</li>
+ <li>Use "#" instead of backspace.</li>
+ <li>Use "chdir" instead of "cd".</li>
+ <li>Use "ed" to edit a file.</li>
+ </ul>
+</li>
+</ul>
+</p>
+
+<p>
+<button id="loadV6Button" onclick="loadUnixV6DiskImage( )">load UNIX V6 Disk image</button>
+<button id="exportButton" onclick="exportDiskImage( )">export Disk image</button>
+<button id="resetButton" onclick="resetPdp11( )">reset</button>
+<span id="diskImageSpan"></span>
+<span id="traceLogSpan"></span>
+</p>
+
+<p>
+<textarea id="terminalView" cols="80" rows="20" readonly="readonly" onkeypress="inputTerminalByKeypress( event )" onkeydown="inputTerminalByKeydown( event )"> </textarea>
+</p>
+
+<p>
+<input type="text" id="androidInput" size="30" onchange="inputTerminalForAndroid( )" />
+Input area for Android
+</p>
+
+<p>
+show debugger (under construction)
+<input type="checkbox" id="showDebuggerCheck" onchange="showDebugger( )" />
+</p>
+
+<span id="debuggerSpan" style="display: none">
+<p>
+instruction
+<input type="checkbox" id="instructionCheck" onclick="changeDebugFlags( )" />
+trap
+<input type="checkbox" id="trapCheck" onclick="changeDebugFlags( )" />
+interrupt
+<input type="checkbox" id="interruptCheck" onclick="changeDebugFlags( )" />
+system call
+<input type="checkbox" id="systemCallCheck" onclick="changeDebugFlags( )" />
+kernel symbol
+<input type="checkbox" id="kernelSymbolCheck" onclick="changeDebugFlags( )" />
+</p>
+
+<p>
+<input id="breakPointInput" type="text" size="10" />
+<button onclick="addBreakPoint( )">add break point</button>
+break points
+<select id="breakPointsSelect">
+</select>
+<button onclick="removeBreakPoint( )">remove break point</button>
+</p>
+
+<p>
+<button id="stopButton" onclick="stopPdp11( )">stop</button>
+<button id="nextStepButton" onclick="nextStep( )">next step</button>
+<button id="continueButton" onclick="continueStep( )">continue</button>
+<input type="text" size="10" id="memoryAddressInput" />
+<button id="virtualAddressButton" onclick="loadVirtualAddress( )">virtual address</button>
+<button id="physicalAddressButton" onclick="loadPhysicalAddress( )">physical address</button>
+</p>
+
+<p>
+<textarea id="debugView" cols="80" rows="21" readonly="readonly"> </textarea>
+<canvas id="debugCanvas" width="50" height="250" />
+</p>
+
+<p>
+<textarea id="pdp11View" cols="64" rows="15" readonly="readonly"> </textarea>
+<textarea id="stackView" cols="12" rows="15" readonly="readonly"> </textarea>
+</p>
+
+</span>
+
+</body>
+</html>
